@@ -1,232 +1,156 @@
-# Selebox All-In-One — Project Handoff (April 25, 2026)
+# Selebox All-In-One — Project Context
 
-## 🎯 Project Overview
-Building a Facebook + YouTube hybrid social platform called **Selebox All-In-One**.
+_Last updated: April 26, 2026_
 
-**Live URL:** https://sele-gray.vercel.app  
-**User skill level:** Complete beginner, edits files via GitHub web UI (pencil ✏️) → auto-deploy via Vercel.
+## Overview
+Selebox is a social platform with native video features. The website integrates with a mobile app (built on Appwrite) and uses Bunny.net for video hosting/streaming.
 
----
+## Stack
+- **Database / Auth:** Supabase
+- **Video hosting:** Bunny.net (Stream)
+- **Video playback:** HLS.js (inline in feed)
+- **Mobile app backend:** Appwrite
+- **Edge Functions:** Supabase Edge Functions (e.g., `bunny-delete`)
 
-## 🏗 Tech Stack
-
-| Layer | Service | Notes |
-|-------|---------|-------|
-| Frontend host | Vercel | sele-gray.vercel.app |
-| Auth + DB (web) | Supabase | Project: `zplisqwoejxrdrpbfass` |
-| Old video metadata | Appwrite | Project: `66b8be7400121b5d4697` (3,308 existing videos, READ-ONLY for web) |
-| New video metadata | Supabase | `videos` table |
-| Video CDN | Bunny Stream | Library ID: `541939`, CDN: `vz-fdf88b4d-33a.b-cdn.net` |
-
-### Key Supabase config
-- Project URL: `https://zplisqwoejxrdrpbfass.supabase.co`
-- Publishable key: `sb_publishable_1u8sicdlwn15-I_9kvQmLA_NavAUkDs`
-- Auth: Google OAuth + Anonymous (Guest)
-- Storage bucket: `images` (public)
-
-### Key Appwrite config (READ-ONLY for web)
-- Endpoint: `https://fra.cloud.appwrite.io/v1`
-- Database ID: `66b32b3600246bc34956`
-- Videos collection: `6915577000216471ecf7`
-- Users collection: `66b32b4a0022880bc87e`
+## Routes / Features
+- **Home feed** — posts include video entries, rendered inline via HLS.js, linked through `video_id`
+- **Profile** — feed/profile queries include `videos(...)` join
+- **Creator Studio** — `#studio` route; full table view, stats, edit modal, delete action
+- **Video uploads** — create posts in home feed automatically
 
 ---
 
-## 📂 File Structure (in GitHub repo)
+## Session: April 25–26, 2026
 
-- `index.html` — main HTML
-- `css/style.css` — premium dark/purple theme + light mode
-- `js/app.js` — main app logic (~1800+ lines)
-- `js/supabase.js` — Supabase client + Appwrite REST helpers + Bunny config
-- `vercel.json` — static deploy config
+### Completed
+- Video uploads create posts in home feed (with `video_id` link)
+- Video player renders inline in feed using HLS.js
+- Feed/profile queries include `videos(...)` join
+- Creator Studio at `#studio` route — full table, stats, edit modal, delete
+- `bunny-delete` Edge Function (server-side cleanup)
+- Auth double-render bug fixed
 
-External CDN scripts: Cropper.js, hls.js
-
----
-
-## 🏛 Architecture Decision (IMPORTANT)
-
-**User has mobile apps on Appwrite + 3,308 existing videos. Just started building website.**
-
-**Decided approach:**
-- Phase 1 (NOW): Website built on Supabase. Old videos read-only from Appwrite. New videos written to Supabase only.
-- Phase 2 (LATER): Update mobile apps to also read from Supabase.
-- Phase 3 (FINAL): Migrate all Appwrite data to Supabase, drop Appwrite entirely.
-
-**Today's task:** Just write to Supabase. Don't worry about mobile sync yet. Don't roll out publicly.
+### Known Issues / TODO
+1. **Bunny processing status stuck** — Videos appear in feed/videos page before Bunny finishes processing; status stays `"processing"` forever because the webhook isn't wired yet.
+2. **Webhook routing** — Bunny webhook URL currently points to Appwrite (mobile app). Options to resolve:
+   - Forward from Appwrite to the website backend
+   - Polling from the website
+   - Timer-based status check
+3. **Cleanup** — Debug `console.log` statements still in `deletePost` — needs removal.
 
 ---
 
-## ✅ Features COMPLETED
-
-1. **Auth** — Google + Guest accounts, auto-create profile via trigger
-2. **Feed/posts** — text + image, 5MB limit, real-time via Supabase channels
-3. **Reactions** — 5 emojis with hover/tap picker
-4. **Comments + replies** — threaded, image uploads, @username prefill
-5. **Clickable links** — `linkify()` escapes HTML then regex-replaces URLs
-6. **Share menu** — Facebook, Twitter, WhatsApp, Copy link
-7. **Repost** — modal with optional caption + preview
-8. **Image lightbox** — full-size viewer
-9. **Premium UI** — purple gradient topbar, sidebar nav, stories row, compact action bar
-10. **Centered topbar search** — context-aware (people+posts on feed, videos on videos page)
-11. **Profile pages** — banner (3:1), avatar with crop modal, stats, bio, joined date, edit profile, follow/unfollow, posts/about tabs
-12. **URL hash routing** — `#profile/{id}`, `#videos`, `#video/{id}`
-13. **Light/dark mode** — toggle button id `btnTheme`, persisted in localStorage as `selebox_theme`
-14. **Compose char counter** — floats inside textarea
-15. **Video feed (YouTube-style)** — 3-column grid (1100/700px breakpoints), premium card design, hover-to-play preview, duration overlays, resume playback
-16. **Up Next sidebar** — smart algorithm scoring videos by tag match (40/25/15/10/10% from last 5), current video tag overlap, same uploader bonus, log10(views) engagement
-17. **Watch history** — `selebox_watch_history` localStorage key, 30-day filter, weighted interest profile
-18. **Personalized video feed** — 70% interest-matched + 30% trending, interleaved every 3rd
-19. **Smart sidebar Videos icon** — first click goes to videos page, second click scrolls to top
-20. **stopVideoPlayer helper** — properly cleans up HLS instance on navigation
-
-### 🆕 Recently completed: Video Upload!
-21. **Premium video upload modal** — gradient title, dropzone, animated progress bar, dark/light mode support
-22. **Bunny Stream upload** — file → Supabase Edge Function (`bunny-upload`) → Bunny upload URL → direct PUT → metadata in Supabase
-23. **Two upload paths:**
-    - **Feed:** "Video" button next to Photo button in compose (`btnOpenVideoUpload`)
-    - **Videos page:** Big purple gradient "Upload" button (`btnUploadVideo`)
-24. **Both buttons open same modal** — title (req), description, tags (comma-separated), category dropdown
-25. **Edge Function deployed:** `bunny-upload` (NOT `smart-task` — was renamed/recreated)
-26. **Secrets in Supabase:** `BUNNY_API_KEY`, `BUNNY_LIBRARY_ID`, `BUNNY_CDN_HOSTNAME`
+## Notes for Next Session
+- Decide webhook strategy (Appwrite forward vs. polling vs. timer) before implementing
+- Drop relevant source files into this workspace folder so Claude can read/edit them directly
 
 ---
 
-## 📋 Supabase `videos` table schema (already created)
+## Session: April 26, 2026 — Plan
 
-```sql
-CREATE TABLE videos (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  bunny_video_id TEXT NOT NULL UNIQUE,
-  bunny_library_id TEXT NOT NULL,
-  video_url TEXT,
-  thumbnail_url TEXT,
-  title TEXT NOT NULL,
-  description TEXT DEFAULT '',
-  tags TEXT[] DEFAULT ARRAY[]::TEXT[],
-  category TEXT DEFAULT 'general',
-  uploader_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  appwrite_video_id TEXT,
-  views INTEGER DEFAULT 0,
-  likes INTEGER DEFAULT 0,
-  duration INTEGER DEFAULT 0,
-  status TEXT DEFAULT 'processing',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
--- + indexes, RLS, triggers, posts.video_id column
-```
+### Goals
+1. **Split Bunny Stream** — separate library for website, leaving mobile untouched
+2. **Edit button (Studio)** — wire up + premium purple UI
+3. **Delete button (Studio)** — wire up + premium confirmation modal
 
----
+### Decisions Locked In
+- **Bunny separation:** **Separate Library** (full isolation — own API key, library ID, CDN hostname, webhook URL)
+- **Editable fields in Studio:** Title, Description / caption, Thumbnail (custom upload), Visibility (public/private)
+- **Delete confirmation style:** Centered premium modal, purple accent, clear warning copy, red "Delete forever" button — single confirm click
+- **Code access:** User will drop source files into the workspace folder
 
-## 🔌 Supabase Edge Function: `bunny-upload`
+### Implementation Plan
 
-URL: `https://zplisqwoejxrdrpbfass.supabase.co/functions/v1/bunny-upload`
+#### 1. Bunny Stream Split
+- Create new Bunny Stream Library in dashboard (web side)
+- Add new env vars: `VITE_BUNNY_WEB_LIBRARY_ID`, `VITE_BUNNY_WEB_API_KEY`, `VITE_BUNNY_WEB_CDN_HOSTNAME` (or equivalent)
+- Update website upload flow to target the new library
+- Update HLS playback URLs to use the new CDN hostname
+- Update `bunny-delete` Edge Function to use the new credentials when deleting web videos
+- Set webhook URL on new library → points directly at website backend (resolves the "stuck processing" issue)
+- Mobile app's existing Bunny config stays untouched
 
-Function uses raw `fetch` (NO `import { createClient }` — that caused boot errors).
+#### 2. Studio Edit (Premium Purple)
+- Wire edit modal:
+  - Load current video record (title, description, thumbnail URL, visibility)
+  - Form fields for all four
+  - Thumbnail: file input → upload to Bunny Stream as custom thumbnail (PUT /library/{id}/videos/{guid}/thumbnail)
+  - Visibility: toggle switch → updates `is_public` (or equivalent) column
+  - Save → Supabase update + table refresh, optimistic UI
+- Visual polish:
+  - Purple accent (`#7c3aed` / Tailwind `violet-600`) on focus rings, primary button, toggle, header line
+  - Subtle shadow + rounded corners on modal
+  - Icon-led inputs (Lucide), clean typography hierarchy
+  - Loading state on save button (spinner + "Saving…")
 
-Verifies user via `${SUPABASE_URL}/auth/v1/user` endpoint, creates Bunny video, returns `videoId`, `uploadUrl`, `accessKey`, `videoUrl`, `thumbnailUrl`.
+#### 3. Studio Delete (Premium Confirmation)
+- Replace any `confirm()` with a custom modal:
+  - Centered overlay, dim backdrop
+  - Purple accent on heading/icon, but danger-red "Delete forever" CTA
+  - Copy: "This permanently removes the video from your feed and Bunny storage. This can't be undone."
+  - Cancel + Delete forever buttons
+- On confirm:
+  - Call `bunny-delete` Edge Function (server-side Bunny delete)
+  - Delete Supabase row(s) — post + video
+  - Refresh Studio table
+  - Toast on success/failure
+- Remove leftover `console.log`s from `deletePost`
 
----
-
-## 🎬 Code patterns
-
-### Appwrite query format (CRITICAL):
-```js
-await appwriteList(APPWRITE.videosCollection, [
-  JSON.stringify({ method: 'orderDesc', attribute: '$createdAt' }),
-  JSON.stringify({ method: 'limit', values: [50] })
-]);
-```
-
-### Edge Function helper (in `js/supabase.js`):
-```js
-export async function callEdgeFunction(functionName, payload = {}) {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session) throw new Error('Not logged in');
-  const url = `${SUPABASE_URL}/functions/v1/${functionName}`;
-  // ... fetch with Bearer token ...
-}
-```
-
-### Imports in `js/app.js` line 1:
-```js
-import { supabase, REACTIONS, timeAgo, initials, appwriteList, appwriteGet, APPWRITE, callEdgeFunction, BUNNY } from './supabase.js';
-```
-
-### Variable naming: Supabase client is named `supabase` NOT `supabaseClient`.
+### Files Likely to Touch (request from user)
+- Studio component (table, edit modal, delete handler)
+- Upload component (Bunny upload logic)
+- Feed/profile video player (HLS source URL)
+- Supabase client + env config (`.env`, `vite.config`, etc.)
+- `bunny-delete` Edge Function
+- Any types / DB schema for `videos` table
 
 ---
 
-## 🐛 Bugs fixed during this session
+## Session: April 26, 2026 — Progress
 
-- Theme toggle wasn't working — root cause: leftover `videoSearchInput`/`videoSearchClear` event listeners after deleting that HTML
-- Sidebar Videos icon click — added smart "if already on videos page, scroll to top instead of refresh" logic
-- Edge Function CORS error — root cause: function was named `smart-task` not `bunny-upload` (fixed by deleting + recreating)
-- `supabaseClient is not defined` — replaced all instances with `supabase`
-- Missing `export` keywords on `BUNNY` and `callEdgeFunction` in `supabase.js`
+### ✅ Completed
+- **Premium confirmation modal** — added reusable `#confirmModal` component (HTML + CSS) and `confirmDialog({ title, body, confirmLabel })` JS helper.
+- **Delete buttons upgraded** — replaced native `confirm()` in three places:
+  - `window.deletePost` (home feed post delete)
+  - `window.deleteComment` (comment delete)
+  - `deleteStudioVideo` (Studio table delete)
+- **Debug log cleanup** — removed all `🗑️` and `🎥` debug `console.log` statements; kept legitimate `console.error` calls for actual errors.
+- Modal supports Esc to cancel, Enter to confirm, backdrop click to dismiss, focus on Cancel by default for safer UX.
 
----
+### ⏳ Blocked / Needs Inputs From User
+- **Bunny Stream split (Task #1)** — All Bunny credentials live in the Edge Functions (`bunny-upload`, `bunny-delete`), which weren't dropped into the workspace. Need user to drop Edge Function source so we can swap library credentials and add a `bunny-set-thumbnail` function.
+- **Custom thumbnail upload in edit modal** — Same blocker as above. Bunny thumbnail API requires a server-side call.
+- **Visibility toggle in edit modal** — `videos` table has no `is_public` column. Currently the "Public/Processing" badge is derived from `status === 'ready'`. Adding a real toggle requires a DB migration:
+  ```sql
+  alter table videos add column is_public boolean not null default true;
+  ```
 
-## 🚧 CURRENT WORK (where we left off)
-
-**Status:** Upload works! Video uploaded to Bunny, metadata saved to Supabase.  
-**Confirmed in Supabase:** Row exists in `videos` table with all fields populated.  
-**Bunny:** Video processed and ready.
-
-**Last task:** Make uploaded videos appear on the Videos page.
-
-### What's been added to `app.js`:
-- `fetchSupabaseVideos()` helper function — fetches videos from Supabase, transforms to Appwrite format with `_supabase: true` flag and `$id` prefix `sb_`
-
-### Last instruction given to user (NOT YET COMPLETED):
-Find this in `loadVideos()`:
-```js
-await ensureVideoCache();
-```
-
-Replace with:
-```js
-await ensureVideoCache();
-
-// Merge in new Supabase uploads
-const supabaseVideos = await fetchSupabaseVideos();
-if (supabaseVideos.length) {
-  supabaseVideos.forEach(v => {
-    if (v._uploaderInfo && !allUploadersCache[v.uploader]) {
-      allUploadersCache[v.uploader] = v._uploaderInfo;
-    }
-  });
-  const existingIds = new Set(allVideosCache.map(v => v.$id));
-  const newOnes = supabaseVideos.filter(v => !existingIds.has(v.$id));
-  allVideosCache = [...newOnes, ...allVideosCache];
-}
-```
+### 🟡 Still Open (in code, no blockers)
+- **Edit modal premium polish (Task #2)** — base modal is functional. Remaining work is purely visual: deeper purple accents, refined input styling, hover/focus states, save button animation. Can be done without any new files.
 
 ---
 
-## 🎯 NEXT STEPS
+## Session: April 26, 2026 — Bunny split + edit polish
 
-1. ✅ Complete the merge in `loadVideos()` (instruction above)
-2. Test that uploaded video shows on videos page
-3. Verify video plays correctly when clicked (HLS.js with `video_url` from Supabase)
-4. May need to update `playVideo()` to handle Supabase-flagged videos (`v._supabase === true`)
-5. Show uploaded videos on uploader's profile page
-6. Consider: Facebook-style video posts in the home feed
+### ✅ Completed
+- **Bunny stream split** — `bunny-upload` and `bunny-delete` Edge Functions now use `BUNNY_*_NEW` env vars. New website uploads land in the new library.
+- **`bunny-delete` is library-aware** — refuses to delete from old (mobile) library; only operates on new-library videos. Legacy videos are safely DB-row-only deleted.
+- **`bunny-webhook` Edge Function created** — auto-flips video status from "processing" → "ready" when Bunny finishes encoding. Captures duration. Requires JWT verification disabled.
+- **Studio Edit Modal premium polish** — added missing CSS for `.vu-modal`, `.vu-label`, `.vu-input`, `.vu-textarea`, `.vu-btn-secondary`. Added top accent purple ribbon, gradient title text, custom select chevron, focus ring with purple glow, hover state, polished thumbnail preview frame. Save button now has spinner state via `.is-saving` class.
 
-### Possible future tasks:
-- Notifications system (bell icon exists, no logic)
-- Messages/DM system (mail icon exists, no logic)
-- Bookmarks (sidebar icon exists, no logic)
-- Phase 2 mobile app integration
+### Bunny env vars in Supabase (current state)
+| Name | Used by | Points at |
+|---|---|---|
+| `BUNNY_API_KEY` | (parked, future migration script) | Old library |
+| `BUNNY_LIBRARY_ID` | (parked) | Old library |
+| `BUNNY_CDN_HOSTNAME` | (parked) | Old library |
+| `BUNNY_API_KEY_NEW` | bunny-upload, bunny-delete, bunny-webhook | New library |
+| `BUNNY_LIBRARY_ID_NEW` | bunny-upload, bunny-delete, bunny-webhook | New library |
+| `BUNNY_CDN_HOSTNAME_NEW` | bunny-upload | New library |
 
----
+### ⏳ Open work
+- **Visibility toggle in edit modal** — still needs `alter table videos add column is_public boolean not null default true;` run in Supabase SQL Editor. Once run, I'll add the toggle UI and feed-filter logic.
+- **Custom thumbnail upload in edit modal** — needs new `bunny-set-thumbnail` Edge Function (not yet built) since Bunny's thumbnail API requires server-side credentials.
 
-## 🤝 User preferences
-
-- Prefers small per-line edits over whole-file replacements
-- Uses screenshots heavily for debugging
-- "Which files changed?" pattern adopted to minimize friction
-- F12 console screenshots for debugging
-- Prefers explicit step-by-step instructions
-- Single Vercel project at sele-gray.vercel.app
+### 🐛 Bug fixed
+- **"Appwrite Error: 400" on clicking Supabase videos** — `playVideo()` blindly called `appwriteGet()` for every video, even Supabase ones. Supabase videos are prefixed with `sb_` and have `_supabase: true`. Updated `playVideo` to detect Supabase videos and use the cached `allVideosCache` data + pre-populated `_uploaderInfo` instead of hitting Appwrite. No more 400s when clicking new website-uploaded videos.
