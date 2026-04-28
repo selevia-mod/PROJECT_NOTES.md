@@ -1,156 +1,217 @@
 # Selebox All-In-One — Project Context
 
-_Last updated: April 26, 2026_
+_Last refreshed: April 28, 2026_
 
-## Overview
-Selebox is a social platform with native video features. The website integrates with a mobile app (built on Appwrite) and uses Bunny.net for video hosting/streaming.
-
-## Stack
-- **Database / Auth:** Supabase
-- **Video hosting:** Bunny.net (Stream)
-- **Video playback:** HLS.js (inline in feed)
-- **Mobile app backend:** Appwrite
-- **Edge Functions:** Supabase Edge Functions (e.g., `bunny-delete`)
-
-## Routes / Features
-- **Home feed** — posts include video entries, rendered inline via HLS.js, linked through `video_id`
-- **Profile** — feed/profile queries include `videos(...)` join
-- **Creator Studio** — `#studio` route; full table view, stats, edit modal, delete action
-- **Video uploads** — create posts in home feed automatically
+> Living doc. Replaces the prior session-log format. Reflects the **current state** of the codebase and database, with a short change log at the bottom.
 
 ---
 
-## Session: April 25–26, 2026
+## 1. Overview
 
-### Completed
-- Video uploads create posts in home feed (with `video_id` link)
-- Video player renders inline in feed using HLS.js
-- Feed/profile queries include `videos(...)` join
-- Creator Studio at `#studio` route — full table, stats, edit modal, delete
-- `bunny-delete` Edge Function (server-side cleanup)
-- Auth double-render bug fixed
+Selebox is a social platform with three first-class content types: **posts**, **videos**, and **books**. The website is a vanilla HTML/JS app. A separate mobile app (Appwrite-backed) shares some legacy content (videos + books) read-only on the web.
 
-### Known Issues / TODO
-1. **Bunny processing status stuck** — Videos appear in feed/videos page before Bunny finishes processing; status stays `"processing"` forever because the webhook isn't wired yet.
-2. **Webhook routing** — Bunny webhook URL currently points to Appwrite (mobile app). Options to resolve:
-   - Forward from Appwrite to the website backend
-   - Polling from the website
-   - Timer-based status check
-3. **Cleanup** — Debug `console.log` statements still in `deletePost` — needs removal.
+## 2. Stack
 
----
+- **Database / Auth:** Supabase (Postgres + RLS + Realtime + Storage)
+- **Video hosting / encoding:** Bunny.net Stream (separate "new" library for web, isolated from mobile's library)
+- **Video playback:** HLS.js (inline in feed + dedicated player)
+- **Rich text editor:** Quill 2.0 (CDN)
+- **Edge Functions (Deno):** `bunny-upload`, `bunny-delete`, `bunny-webhook`
+- **Mobile backend:** Appwrite (legacy; web reads books/videos collections via JS SDK, no writes)
+- **Frontend:** Plain `index.html` + `app.js` (~10k lines) + `style.css`. No framework, no bundler. Admin panel is a separate `admin.html` + `admin.js` + `admin.css`.
 
-## Notes for Next Session
-- Decide webhook strategy (Appwrite forward vs. polling vs. timer) before implementing
-- Drop relevant source files into this workspace folder so Claude can read/edit them directly
+## 3. Key Architectural Decisions
 
----
-
-## Session: April 26, 2026 — Plan
-
-### Goals
-1. **Split Bunny Stream** — separate library for website, leaving mobile untouched
-2. **Edit button (Studio)** — wire up + premium purple UI
-3. **Delete button (Studio)** — wire up + premium confirmation modal
-
-### Decisions Locked In
-- **Bunny separation:** **Separate Library** (full isolation — own API key, library ID, CDN hostname, webhook URL)
-- **Editable fields in Studio:** Title, Description / caption, Thumbnail (custom upload), Visibility (public/private)
-- **Delete confirmation style:** Centered premium modal, purple accent, clear warning copy, red "Delete forever" button — single confirm click
-- **Code access:** User will drop source files into the workspace folder
-
-### Implementation Plan
-
-#### 1. Bunny Stream Split
-- Create new Bunny Stream Library in dashboard (web side)
-- Add new env vars: `VITE_BUNNY_WEB_LIBRARY_ID`, `VITE_BUNNY_WEB_API_KEY`, `VITE_BUNNY_WEB_CDN_HOSTNAME` (or equivalent)
-- Update website upload flow to target the new library
-- Update HLS playback URLs to use the new CDN hostname
-- Update `bunny-delete` Edge Function to use the new credentials when deleting web videos
-- Set webhook URL on new library → points directly at website backend (resolves the "stuck processing" issue)
-- Mobile app's existing Bunny config stays untouched
-
-#### 2. Studio Edit (Premium Purple)
-- Wire edit modal:
-  - Load current video record (title, description, thumbnail URL, visibility)
-  - Form fields for all four
-  - Thumbnail: file input → upload to Bunny Stream as custom thumbnail (PUT /library/{id}/videos/{guid}/thumbnail)
-  - Visibility: toggle switch → updates `is_public` (or equivalent) column
-  - Save → Supabase update + table refresh, optimistic UI
-- Visual polish:
-  - Purple accent (`#7c3aed` / Tailwind `violet-600`) on focus rings, primary button, toggle, header line
-  - Subtle shadow + rounded corners on modal
-  - Icon-led inputs (Lucide), clean typography hierarchy
-  - Loading state on save button (spinner + "Saving…")
-
-#### 3. Studio Delete (Premium Confirmation)
-- Replace any `confirm()` with a custom modal:
-  - Centered overlay, dim backdrop
-  - Purple accent on heading/icon, but danger-red "Delete forever" CTA
-  - Copy: "This permanently removes the video from your feed and Bunny storage. This can't be undone."
-  - Cancel + Delete forever buttons
-- On confirm:
-  - Call `bunny-delete` Edge Function (server-side Bunny delete)
-  - Delete Supabase row(s) — post + video
-  - Refresh Studio table
-  - Toast on success/failure
-- Remove leftover `console.log`s from `deletePost`
-
-### Files Likely to Touch (request from user)
-- Studio component (table, edit modal, delete handler)
-- Upload component (Bunny upload logic)
-- Feed/profile video player (HLS source URL)
-- Supabase client + env config (`.env`, `vite.config`, etc.)
-- `bunny-delete` Edge Function
-- Any types / DB schema for `videos` table
+- **Postgres-first business logic.** Triggers + RPCs + RLS enforce rules. Edge Functions are reserved for things that must touch a 3rd-party API (Bunny). No app server.
+- **Two Bunny libraries.** Web uploads go to a dedicated library via `BUNNY_*_NEW` env vars. The old (mobile) library is not touched by web Edge Functions — `bunny-delete` actively refuses to operate on legacy library videos.
+- **Lazy auth / claim-by-email.** Profiles can exist before `auth.users`. On first Supabase sign-in, `handle_new_user()` matches by email and adopts the legacy row. FKs use `on update cascade` so the swap is safe.
+- **Polymorphic engagement.** `comments` works for posts and videos (mutually-exclusive `post_id` / `video_id`). `reactions` is polymorphic via `target_type` + `target_id`. `chapter_comments` is its own table (threaded).
+- **Coalesced engagement notifications.** Likes/comments/reposts/book likes/chapter comments fan into one unread `notifications` row per `(recipient, type, target)` with an `actor_ids[]` array (capped at 20). Follower fan-out (new post / new book) stays uncoalesced because each event has a unique target.
+- **Dual-source content.** Books and videos may originate from Supabase (web-native, full CRUD) or Appwrite (mobile, read-only). IDs are prefixed (`aw_`, `bk_`, `sb_`) to disambiguate at the boundary.
+- **Reader anti-copy.** Chapter reader uses CSS `user-select: none` + right-click block + a deterministic watermark over content. Deterrent, not security.
 
 ---
 
-## Session: April 26, 2026 — Progress
+## 4. Routes / Sidebar
 
-### ✅ Completed
-- **Premium confirmation modal** — added reusable `#confirmModal` component (HTML + CSS) and `confirmDialog({ title, body, confirmLabel })` JS helper.
-- **Delete buttons upgraded** — replaced native `confirm()` in three places:
-  - `window.deletePost` (home feed post delete)
-  - `window.deleteComment` (comment delete)
-  - `deleteStudioVideo` (Studio table delete)
-- **Debug log cleanup** — removed all `🗑️` and `🎥` debug `console.log` statements; kept legitimate `console.error` calls for actual errors.
-- Modal supports Esc to cancel, Enter to confirm, backdrop click to dismiss, focus on Cancel by default for safer UX.
+Hash-based, no router lib. `setSidebarActive()` syncs the highlighted item.
 
-### ⏳ Blocked / Needs Inputs From User
-- **Bunny Stream split (Task #1)** — All Bunny credentials live in the Edge Functions (`bunny-upload`, `bunny-delete`), which weren't dropped into the workspace. Need user to drop Edge Function source so we can swap library credentials and add a `bunny-set-thumbnail` function.
-- **Custom thumbnail upload in edit modal** — Same blocker as above. Bunny thumbnail API requires a server-side call.
-- **Visibility toggle in edit modal** — `videos` table has no `is_public` column. Currently the "Public/Processing" badge is derived from `status === 'ready'`. Adding a real toggle requires a DB migration:
-  ```sql
-  alter table videos add column is_public boolean not null default true;
-  ```
-
-### 🟡 Still Open (in code, no blockers)
-- **Edit modal premium polish (Task #2)** — base modal is functional. Remaining work is purely visual: deeper purple accents, refined input styling, hover/focus states, save button animation. Can be done without any new files.
-
----
-
-## Session: April 26, 2026 — Bunny split + edit polish
-
-### ✅ Completed
-- **Bunny stream split** — `bunny-upload` and `bunny-delete` Edge Functions now use `BUNNY_*_NEW` env vars. New website uploads land in the new library.
-- **`bunny-delete` is library-aware** — refuses to delete from old (mobile) library; only operates on new-library videos. Legacy videos are safely DB-row-only deleted.
-- **`bunny-webhook` Edge Function created** — auto-flips video status from "processing" → "ready" when Bunny finishes encoding. Captures duration. Requires JWT verification disabled.
-- **Studio Edit Modal premium polish** — added missing CSS for `.vu-modal`, `.vu-label`, `.vu-input`, `.vu-textarea`, `.vu-btn-secondary`. Added top accent purple ribbon, gradient title text, custom select chevron, focus ring with purple glow, hover state, polished thumbnail preview frame. Save button now has spinner state via `.is-saving` class.
-
-### Bunny env vars in Supabase (current state)
-| Name | Used by | Points at |
+| Sidebar item | Hash | Page id |
 |---|---|---|
-| `BUNNY_API_KEY` | (parked, future migration script) | Old library |
-| `BUNNY_LIBRARY_ID` | (parked) | Old library |
-| `BUNNY_CDN_HOSTNAME` | (parked) | Old library |
-| `BUNNY_API_KEY_NEW` | bunny-upload, bunny-delete, bunny-webhook | New library |
-| `BUNNY_LIBRARY_ID_NEW` | bunny-upload, bunny-delete, bunny-webhook | New library |
-| `BUNNY_CDN_HOSTNAME_NEW` | bunny-upload | New library |
+| Home | `#home` | `#feed` |
+| Videos | `#videos` | `#videosPage` |
+| Studio | `#studio` | (videos page, studio sub-view) |
+| Book | `#book`, `#book/{id}`, `#book/{id}/chapter/{idx}` | `#bookPage`, `#bookDetailPage`, `#chapterReaderPage` |
+| Author | `#author`, `#author/book/{id}`, `#author/book/{id}/chapter/{id\|new}` | `#authorPage` (3 internal views) |
+| Bookmarks | `#bookmarks` | `#bookmarksPage` (videos + books unified) |
+| Messages | `#messages` | `#messagesPage` |
+| Profile | `#profile/{id}` | `#profilePage` (tabs: posts / videos / books / about) |
+| Notifications | (panel) | `#notificationsPanel` (dropdown) |
+| Admin | `/admin.html` | separate page, email-gated |
 
-### ⏳ Open work
-- **Visibility toggle in edit modal** — still needs `alter table videos add column is_public boolean not null default true;` run in Supabase SQL Editor. Once run, I'll add the toggle UI and feed-filter logic.
-- **Custom thumbnail upload in edit modal** — needs new `bunny-set-thumbnail` Edge Function (not yet built) since Bunny's thumbnail API requires server-side credentials.
+---
 
-### 🐛 Bug fixed
-- **"Appwrite Error: 400" on clicking Supabase videos** — `playVideo()` blindly called `appwriteGet()` for every video, even Supabase ones. Supabase videos are prefixed with `sb_` and have `_supabase: true`. Updated `playVideo` to detect Supabase videos and use the cached `allVideosCache` data + pre-populated `_uploaderInfo` instead of hitting Appwrite. No more 400s when clicking new website-uploaded videos.
+## 5. Database — Current Schema by Feature Area
+
+Migration filenames are listed for traceability. All migrations are idempotent unless noted.
+
+### 5.1 Foundation / lazy-auth migration
+- `migration_pre.sql`, `migration_pre_v2.sql` — adds `legacy_appwrite_id` columns to `profiles`, `books`, `chapters`, `videos`, `comments`, `chapter_comments`, `posts` for idempotent dedup during the Appwrite→Supabase migration. Adds `posts.views_count`, ensures `profiles.bio` / `profiles.banner_url`.
+- `migration_lazy_auth.sql` — `profiles.email` with case-insensitive unique index, drops FK from `profiles.id → auth.users`, replaces `handle_new_user()` to claim a legacy profile by email on first sign-in.
+
+### 5.2 Posts, comments, reactions
+- Core tables `posts`, `comments`, `reactions` exist from earlier migrations.
+- `migration_video_comments.sql` — makes `comments` polymorphic across posts and videos (`post_id` OR `video_id` exclusive check), updates `notify_on_comment` trigger.
+- `migration_video_reactions.sql` — extends `notify_on_reaction` to handle videos (uses `videos.uploader_id`).
+- `migration_video_comments_legacy.sql` / `migration_reactions_legacy.sql` — allow comments and reactions on legacy (Appwrite) videos. `reactions.target_id` is `text` so it holds both UUIDs and Appwrite IDs; trigger try-casts and skips notification on legacy.
+
+### 5.3 Books, chapters, reading
+- `migration_books.sql` — schema for `books`, `chapters`, `book_reads`, `book_bookmarks`, `book_likes`, `chapter_comments`. Storage bucket `book-covers` (public read, owner write). RLS publicly reads published chapters of public books only.
+- `migration_books_fixup.sql` — repoints book FKs to `profiles(id)` so PostgREST joins work correctly for the reader.
+- `migration_book_like_bookmark_triggers.sql` — auto-syncs `books.likes_count` from `book_likes` insert/delete.
+- `migration_chapter_assets.sql` — adds `chapters.cover_url` (chapter hero image). Inline images live in `chapters.content` HTML; storage path `book-covers/chapters/...`.
+- `migration_chapter_scheduling.sql` — adds `chapters.scheduled_publish_at`. RLS gates visibility on `(is_published AND (scheduled_publish_at IS NULL OR <= now()))`. RPC `publish_due_scheduled_chapters()` returns a count for diagnostic sweeps from the client; no state flip needed.
+
+### 5.4 Videos
+- `migration_video_bookmarks.sql` — `video_bookmarks(user_id, video_id)`, RLS users-own.
+- `migration_video_scheduling.sql` — adds `videos.scheduled_publish_at`. Trigger `unhide_video_post_on_ready()` flips the linked `posts.is_hidden` when Bunny finishes encoding (skips if a future schedule is pending). RPC `publish_due_scheduled_videos()` for manual sweep.
+
+### 5.5 Notifications
+- `migration_notifications.sql` (Phase 1) — `notifications` table + 7 engagement triggers + Realtime publication.
+- `migration_notifications_phase2.sql` — fan-out triggers for `posts insert → followers` (variants for new post / new video / repost) and `books → followers` on publish.
+- `migration_notifications_phase3.sql` — `@mention` regex detection in `comments` and `chapter_comments`, deduped vs. parent-thread/post-owner.
+- `migration_notifications_coalesce.sql` — adds `notifications.actor_ids[]` and rewrites engagement triggers to upsert via `upsert_engagement_notification()` (one unread row per `(recipient, type, target)`, actors deduped, capped at 20, `created_at` bumped). Follower fan-out stays uncoalesced.
+
+### 5.6 Direct Messages
+- `migration_dms.sql` (Phase 1) — `conversations` + `messages` for 1:1 text. Canonical user ordering enforces a unique pair. Soft-delete via `deleted_at`. Realtime on `messages`.
+- `migration_dms_phase2.sql` — `message_reactions(message_id, user_id, emoji)`.
+- `migration_dms_phase3.sql` — group DMs + threading. Conversations gain `is_group`, `name`, `avatar_url`, `archived_by_*`, `muted_until_*`. Messages gain `reply_to_id`. New `conversation_participants` join table; RLS migrates to participant-based checks.
+- `migration_dms_phase3_hotfix.sql` — fixes RLS recursion by wrapping participant checks in a `SECURITY DEFINER` helper `is_conv_participant()`.
+- `migration_dms_phase3_hotfix2.sql` — bulletproofs the group-create RPC (dedupe + drop self + drop nulls).
+- `migration_dms_phase4.sql` — image attachments + GIFs: `messages.image_url`, `messages.image_kind ('upload'|'gif')`, body check relaxed to allow empty body if image present. Storage bucket `dm-attachments` (3MB ceiling, 2.5MB enforced client-side).
+- `migration_dms_phase4_hotfix.sql` — re-binds the body check constraint by introspecting `pg_constraint` (handles auto-naming inconsistency).
+- `migration_dms_phase4_hotfix2.sql` — temporarily drops `messages_notify` trigger (was flooding the bell).
+- `migration_dms_phase4_hotfix3.sql` — restores DM notifications with **per-conversation coalescing**: one unread `dm_message` row per conversation that bumps `created_at` + `metadata.preview` on each new message; `mark_conversation_read()` RPC also marks the related notification read so the bell badge clears.
+
+### 5.7 Profile / social
+- `migration_user_badges.sql` — `user_badges(user_id, badge IN ('creator','writer','pioneer','verified','staff'))`. Public read, mod-only write. `grant_badge()` helper.
+- `migration_pinned_posts.sql` — `posts.pinned_at`, max 3 per user enforced by trigger. Profile feed orders `(pinned_at DESC NULLS LAST, created_at DESC)`.
+- `migration_mutual_followers.sql` — `get_mutual_followers(target, viewer, limit=12)` RPC for "Followed by alice, bob, +12 others" social-proof strip.
+
+### 5.8 Moderation
+- `migration_post_actions.sql` — `post_hides`, `user_snoozes` (with expiry), `user_blocks` (bidirectional, unfollow on block), `post_reports` (reason enum, status pending/reviewing/resolved/dismissed).
+- `migration_user_reports.sql` — same shape, scoped to user-level reports.
+- `migration_admin_setup.sql` — adds `profiles.role ('user'|'moderator'|'admin')`, suspension + ban columns. Adds `posts.is_hidden` + `hidden_by` / `hidden_at` / `hidden_reason`. New `admin_actions` audit log (append-only). Helpers `is_moderator()`, `is_admin()`. View `posts_visible` filters banned + hidden.
+- `migration_videos_books_perf.sql` — extends moderation parity: `is_hidden` columns on `videos` and `books`, partial indexes, `videos_visible` + `books_visible` views.
+
+### 5.9 Performance
+- `migration_feed_perf.sql` — composite + partial indexes for the feed, profile loads, hides, active snoozes. Runs `ANALYZE`.
+- `migration_videos_books_perf.sql` — see above.
+
+---
+
+## 6. Edge Functions
+
+| Function | Purpose | Env vars used |
+|---|---|---|
+| `bunny-upload` | Creates a Bunny Stream session and returns upload URL + GUID | `BUNNY_API_KEY_NEW`, `BUNNY_LIBRARY_ID_NEW`, `BUNNY_CDN_HOSTNAME_NEW` |
+| `bunny-delete` | Deletes a Bunny video + Supabase row. Owner-checked. **Refuses to delete from the legacy library** (mobile-uploaded videos are DB-row-only deleted). | `BUNNY_API_KEY_NEW`, `BUNNY_LIBRARY_ID_NEW` |
+| `bunny-webhook` | Bunny → Selebox callback. Maps Bunny status → `'ready'` / `'error'`, fetches duration on ready. JWT verification disabled. Verifies `VideoLibraryId` matches the new library before acting. | `BUNNY_API_KEY_NEW`, `BUNNY_LIBRARY_ID_NEW` |
+
+The "old" Bunny env vars (`BUNNY_API_KEY`, `BUNNY_LIBRARY_ID`, `BUNNY_CDN_HOSTNAME`) are **parked in Supabase secrets** for any future migration tooling but are not referenced by these functions.
+
+---
+
+## 7. Frontend Modules (`app.js`, ~10,249 lines)
+
+High-level map (line numbers approximate):
+
+- **Auth** (52–160): session detection, OAuth, top-bar user.
+- **Compose** (161–225): post composer, image upload to Storage.
+- **Feed** (226–488): pagination, infinite scroll, lazy media, batch reaction/comment counts, post card render with HLS embed.
+- **Link previews** (661–782): YouTube + generic link cards. DM-specific Selebox-internal preview cards with hydration.
+- **Premium dialogs + post actions** (859–1233): `confirmDialog()`, pin/unpin, hide / snooze / block, content filters (`shouldHidePost()`), report modal.
+- **Reactions** (1483–1536): emoji picker, optimistic UI, batch ops.
+- **Comments** (1549–1743): threaded render, reply input, image-attached comments.
+- **Reposts + share** (1833–1897).
+- **Profile** (1903–2627): parallel queries with skeleton, three tabs (posts/videos/books), badge render, mutual-followers strip, follow modal, edit-profile modal.
+- **Search** (2791–2964): context-aware (feed vs. profile vs. books).
+- **Video upload (Studio)** (3038–3354): stepper UI, calls `bunny-upload`, chunked PUT, scheduling input.
+- **Video player + Up-Next** (3354–3523): HLS attach, watch history (localStorage), tag-based interest profile, resume positions.
+- **Videos page** (3523–3607): browse + Studio toggle.
+- **Books reader** (3627–3843, 4219–4658): browse grid, genre chips, sort, book detail, chapter reader (Quill view), reading progress, watermark, like/bookmark.
+- **Author dashboard** (4659–5320): book list with stats, new-book modal, book editor (cover upload, metadata, status, public toggle), chapter editor (Quill, autosave 1.5s, publish modal with scheduling).
+- **Bookmarks hub** (4778–4947): unified video + book bookmarks tab.
+- **Messages (DMs)**: scattered. Conversation list, thread view, image/GIF composer, reply-to indicator, edit (`edited_at`), realtime subscription, typing indicator + presence via broadcast channels, search.
+
+### Frontend leftovers found in audit
+- Two `console.log` lines around 5620 / 6015 are diagnostic logs for the schedule sweep (`[schedule] flipped X videos to public` style). Safe to leave for now; remove on next cleanup pass.
+- Several intentional empty `catch {}` blocks for non-fatal flows (read-progress save, lightbox close, etc.).
+- No outstanding `TODO` / `FIXME` comments matched by grep.
+
+---
+
+## 8. Admin Panel (`admin.html` + `admin.js`)
+
+Email-gated landing (`gateAccess()`), then five tabs:
+
+1. **Inbox** — pending `post_reports` + `user_reports`. Actions: dismiss, warn, hide post, suspend, ban, grant/revoke role. Each action writes to `admin_actions`.
+2. **Users** — list profiles, show badges + role + ban state, grant/revoke badges, suspend/ban.
+3. **Bans** — currently suspended/banned users with audit info.
+4. **Content** — hidden posts/videos/books, unhide action.
+5. **Activity** — paged read of `admin_actions` audit log.
+
+Caveats: admin-email allowlist is currently **hardcoded in `admin.js`** — should move to a DB-backed allowlist (e.g. promote `profiles.role = 'admin'` to be the source of truth and gate purely on that).
+
+---
+
+## 9. Storage Buckets
+
+| Bucket | Visibility | Notes |
+|---|---|---|
+| `book-covers` | Public read, auth upload, owner delete | Path: `{user_id}/{book_id}-{ts}.{ext}`. Chapter assets under `chapters/` prefix. |
+| `dm-attachments` | Public read, auth upload (owner path), owner delete | 3 MB hard ceiling; 2.5 MB enforced client-side. JPEG/PNG/WebP/GIF. |
+
+---
+
+## 10. Realtime + Broadcast
+
+- **Postgres Realtime** publication: `notifications`, `messages`, `message_reactions`.
+- **Broadcast channels** (app-level, ephemeral): typing indicators in DM threads, presence dots.
+
+---
+
+## 11. Open Work / Known Gaps
+
+1. **Visibility toggle on videos** — `videos.is_hidden` exists (added in `migration_videos_books_perf.sql` for moderation), but the user-facing "public/private" toggle in the Studio edit modal still isn't a real DB-backed boolean; the badge derives from `status === 'ready'`. Decide whether to repurpose `is_hidden` for author-visibility or add a dedicated `is_public` column.
+2. **Custom thumbnail upload for videos** — needs a new `bunny-set-thumbnail` Edge Function (Bunny's thumbnail API requires server-side credentials). Not yet implemented.
+3. **Chapter comments UI** — `chapter_comments` table + notification triggers exist; the reader UI doesn't render or compose comments yet.
+4. **Author-side real-time refresh** — book detail page on the reader side doesn't push when the author publishes; readers see updates on next load.
+5. **Chapter ordering** — chapters render strictly by `chapter_number`; no drag-to-reorder.
+6. **Quill image embeds** — toolbar excludes `image` to keep storage scope tight. Reconsider once chapter-asset story is mature.
+7. **Admin-email allowlist** — hardcoded in `admin.js`; migrate to `profiles.role` gate end-to-end.
+8. **Two stray `console.log`s** in `app.js` (~5620, ~6015) from the schedule sweep diagnostics.
+9. **Appwrite books that don't match a hardcoded genre chip** — only show in the "All" tab. Their `tags` are still searchable but won't surface via the chip UI.
+10. **Appwrite books always show 0 views / 0 likes** in cards — counters live in different Appwrite collections; aggregating per book would require additional queries (intentionally skipped for browse perf).
+
+---
+
+## 12. Change Log (high-level)
+
+- **Apr 25–26** — Video uploads → home feed posts. HLS inline playback. Studio (table + edit + delete). `bunny-delete` Edge Function. Auth double-render bug fixed.
+- **Apr 26** — Premium confirmation modal (replaces native `confirm()` everywhere). Sidebar redesign (220px, gradient active). Book + Author skeleton pages and routing.
+- **Apr 26** — Bunny stream split (web ↔ mobile isolation). `bunny-webhook` Edge Function (auto status flip + duration capture). Studio edit modal premium polish.
+- **Apr 26** — Books Phase 2 (browse, detail, reader with progress, like/bookmark) + Appwrite books read-only integration with dual-source loading + Legacy badge.
+- **Apr 26** — Books Phase 3 (Author dashboard, book editor, Quill chapter editor with autosave, cover upload to `book-covers`).
+- **Apr 26–27** — Notifications: Phase 1 (engagement) → Phase 2 (follower fan-out) → Phase 3 (@mentions) → coalescing rewrite.
+- **Apr 26–27** — Moderation stack: post_actions (hide/snooze/block/report), admin_setup (roles, ban/suspend, audit log, hidden posts), user_reports, perf migrations with parity for videos + books.
+- **Apr 27** — Direct Messages Phase 1 (text + realtime) → Phase 2 (message reactions) → Phase 3 (groups + threading + RLS hotfixes) → Phase 4 (image/GIF + notification coalescing hotfixes).
+- **Apr 27** — Scheduling for videos and chapters. Pinned posts (max 3). Mutual followers RPC. User badges. Video bookmarks + unified Bookmarks hub. Chapter assets (cover image).
+- **Apr 27** — Performance pass (`migration_feed_perf.sql`, `migration_videos_books_perf.sql`).
+- **Apr 28** — `PROJECT_CONTEXT.md` rewritten in living-doc format (this update).
+
+---
+
+## 13. How to keep this doc fresh
+
+When something material ships, update **section 5 (schema)** and/or **section 7 (frontend)** in place, and add a one-liner to section **12 (change log)**. Avoid stacking session-by-session sub-headings — they're what made the previous doc unreadable. Keep section 11 (open work) honest by deleting items as they ship.
